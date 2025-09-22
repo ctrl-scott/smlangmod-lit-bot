@@ -1,0 +1,41 @@
+import { kjvStrongsData } from '../js/kjv_strongs.js';
+
+onmessage = function (e) {
+  const { kind, qid, query, opts } = e.data;
+
+  if (kind === 'kjv:search') {
+    const results = [];
+    const queryRegex = new RegExp(`\\{${query}\\}`, 'i');  // Match the exact Strong's reference like {H7225}
+    const snippetLength = 60;  // Number of characters before and after the Strong's reference to include in the snippet
+
+    if (kjvStrongsData.verses) {
+      const matches = kjvStrongsData.verses.filter(verse => {
+        const cleanedText = verse.text.replace(/<[^>]+>/g, '').trim(); // Remove HTML tags
+        return queryRegex.test(cleanedText);  // Test if the reference is present
+      });
+
+      // Prepare results for sending back
+      matches.forEach(match => {
+        const cleanedText = match.text.replace(/<[^>]+>/g, '').trim();  // Clean the text from HTML tags
+        const matchIndex = cleanedText.indexOf(query);  // Find the index of the reference in the text
+
+        // Extract snippet around the match
+        const startIdx = Math.max(0, matchIndex - snippetLength);  // Ensure we don’t go negative
+        const endIdx = Math.min(cleanedText.length, matchIndex + snippetLength + query.length);  // Keep the reference in the snippet
+
+        const snippet = cleanedText.slice(startIdx, endIdx);  // Extract the snippet
+
+        // Create the formatted output with book name, chapter, verse, and the snippet
+        const result = `${match.book_name} ${match.chapter}:${match.verse} — ${snippet}`;
+        
+        // Push the result into the results array
+        results.push({
+          id: `${match.book_name} ${match.chapter}:${match.verse}`,
+          snippet: result  // The result includes the formatted book name, chapter, verse, and snippet
+        });
+      });
+    }
+
+    postMessage({ kind: 'kjv:done', qid, results });
+  }
+};

@@ -1,0 +1,54 @@
+// kjv_worker.js
+// This worker is responsible for searching through the KJV Strong's data (imported from the kjv_strongs.js module).
+// The worker receives the query, processes the verses, and sends back the matching results.
+
+import { kjvStrongsData } from '../js/kjv_strongs.js';
+
+// Function to normalize text (e.g., make it lowercase for comparison)
+const norm = s => s.toLowerCase();
+const tok = s => s.toLowerCase().split(/[\s,.;!?()"'`]+/).filter(Boolean);
+
+// Function to safely parse a verse text into a matching format
+function scoreText(text, tokens, phrase) {
+  const lc = text.toLowerCase();
+  let score = 0;
+  for (const t of tokens) {
+    if (lc.includes(t)) score += 1;
+  }
+  if (phrase && lc.includes(norm(phrase))) score += 3;
+  return score;
+}
+
+// Search the verses based on query
+async function searchFile(query, { limit = 5, phrase = false } = {}) {
+  const tokens = query.split(/\W+/).map(t => t.toLowerCase());
+  let results = [];
+
+  // Search through the verses for matching tokens
+  for (const verse of kjvStrongsData.verses) {
+    const text = verse.text.toLowerCase();
+    let score = scoreText(text, tokens, phrase);
+    if (score > 0) {
+      results.push({ id: `${verse.book_name} ${verse.chapter}:${verse.verse}`, text: verse.text, score });
+    }
+
+    if (results.length >= limit) break;  // Early exit for performance
+  }
+
+  return results;
+}
+
+// Listen for incoming messages from the main thread (script.js)
+self.addEventListener('message', async (e) => {
+  const { kind, qid, query, opts } = e.data || {};
+  
+  // Ensure that we're processing the correct kind of message
+  if (kind !== 'kjv:search') return;
+
+  try {
+    const results = await searchFile(query, opts);
+    self.postMessage({ kind: 'kjv:done', qid, results });
+  } catch (err) {
+    self.postMessage({ kind: 'kjv:error', qid, error: err.message || String(err) });
+  }
+});

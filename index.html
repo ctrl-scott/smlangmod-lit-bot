@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversational Bot</title>
+    <link rel="stylesheet" href="style.css">  <!-- Linking to external CSS -->
+    <link rel="icon" href="data:,"> <!-- Prevent favicon 404 -->
+</head>
+<body>
+    <div id="chatbox">
+        <!-- Conversation will be displayed here -->
+    </div>
+
+    <div id="user-input-container">
+        <form id="chat-form">
+            <input type="text" id="user-input" placeholder="Say something...">
+            <button id="send-btn">Send</button>
+        </form>
+    </div>
+
+    <div id="log-window">
+        <!-- Logs will be shown here for debugging -->
+    </div>
+
+    <!-- Main JavaScript -->
+    <script type="module" src="script.js"></script>
+
+    <!-- Expose NLP globally for script.js-->
+ <!--   <script type="module">
+        import nlp from 'https://cdn.skypack.dev/compromise';
+       window.__nlp = nlp; // make it available to script.js
+    </script>-->
+<script type="module">
+    import '/libs/compromise/builds/compromise.min.js';
+    window.__nlp = window.nlp; // Make it available globally
+    console.log(window.__nlp); // Check if it's properly loaded
+</script>
+</body>
+</html>
