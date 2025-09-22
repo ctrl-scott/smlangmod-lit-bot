@@ -1,4 +1,3 @@
-//import * as nlp from './libs/compromise/builds/compromise.min.js';
 // ---------- lightweight utilities ----------
 const $ = sel => document.querySelector(sel);
 const chat = $('#chatbox');
@@ -9,7 +8,7 @@ const sendBtn = $('#send-btn');
 const Bot = 'Jolene';
 const bot = 'Jolene (Computer)';
 
-// Logging function to append messages to the log window
+// Logging
 function log(msg) {
   const line = document.createElement('div');
   line.textContent = msg;
@@ -17,7 +16,7 @@ function log(msg) {
   logWin.scrollTop = logWin.scrollHeight;
 }
 
-// Function to add messages to the chatbox
+// Add a chat bubble
 function addMsg(sender, text) {
   const div = document.createElement('div');
   div.className = `msg ${sender === 'You' ? 'me' : 'bot'}`;
@@ -26,25 +25,22 @@ function addMsg(sender, text) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-/* Escape HTML function to avoid XSS attacks
-*/
+// Escape HTML
 const escapeHTML = s => {
-  if (typeof s !== 'string') return '';  // Return empty string if input is not a string
+  if (typeof s !== 'string') return '';
   return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 };
-/*
-const escapeHTML = s => s.replace(/[&<>"']/g, c => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-})[c]);*/
 
 // ---------- compromise (NLP library) ----------
-//import nlp from 'https://cdn.skypack.dev/compromise';
-//const nlp = window.__nlp;
+const nlp = (typeof window !== 'undefined' && window.__nlp) ? window.__nlp : (() => { 
+  // graceful no-op fallback if compromise failed to load
+  const f = x => ({ people:()=>({out:()=>[]}), places:()=>({out:()=>[]}), match:()=>({out:()=>[]}) });
+  return (/* str */) => f();
+})();
 
-// ---------- minimal sentiment analysis ----------
-const POS = new Set(['good', 'great', 'awesome', 'amazing', 'love', 'nice', 'happy', 'glad']);
-const NEG = new Set(['bad', 'sad', 'angry', 'horrible', 'upset', 'frustrating', 'annoyed']);
-
+// ---------- minimal sentiment (fallback if search yields nothing) ----------
+const POS = new Set(['good','great','awesome','amazing','love','nice','happy','glad']);
+const NEG = new Set(['bad','sad','angry','horrible','upset','frustrating','annoyed']);
 function getSentiment(s) {
   const toks = s.toLowerCase().split(/\W+/);
   let p = 0, n = 0;
@@ -52,9 +48,8 @@ function getSentiment(s) {
   return p > n ? 'positive' : n > p ? 'negative' : 'neutral';
 }
 
-// ---------- lazy PDF extraction (on-demand) ----------
+// ---------- lazy PDF extraction (unchanged) ----------
 const pdfLibPromise = (async () => {
-  // defer load until first time we actually need PDF.js
   const mod = await import('./libs/pdfjs-5.4.149-dist/build/pdf.mjs');
   mod.GlobalWorkerOptions.workerSrc = './libs/pdfjs-5.4.149-dist/build/pdf.worker.mjs';
   return mod;
@@ -73,10 +68,8 @@ async function extractPDFTextOnce(pdfPath, pageLimit = 3) {
   return text;
 }
 
-// small memo so repeated queries don’t refetch/parse
-const pdfCache = new Map(); // key: path -> text
+const pdfCache = new Map();
 async function getPdfSnippet(which, chars = 600) {
-  // map short names to asset paths
   const paths = {
     pride: './assets/PP_Austen_PD_1.pdf',
     devlin: './assets/HowtoSpeakWrite_Devlin_PD_1.pdf',
@@ -87,73 +80,71 @@ async function getPdfSnippet(which, chars = 600) {
 
   if (!pdfCache.has(path)) {
     log(`PDF load on demand: ${path}`);
-    const text = await extractPDFTextOnce(path, 4); // first few pages only
+    const text = await extractPDFTextOnce(path, 4);
     pdfCache.set(path, text);
   }
   const full = pdfCache.get(path) || '';
   return full.slice(0, chars);
 }
 
-// ---------- KJV/Strongs streaming search via Web Worker ----------
-// Worker Setup: Ensure worker is initialized correctly
-const kjvWorker = new Worker('kjv_worker.js', { type: 'module' });
+// ---------- KJV/Strongs search via Web Worker ----------
+const kjvWorker = new Worker('./kjv_worker.js', { type: 'module' });
+//const kjvWorker = new Worker('./kjv_worker.js');
 
-// Listen for results from the worker
-kjvWorker.onmessage = function (e) {
-  const { kind, qid, results, error } = e.data;
+// IMPORTANT: single render path (no global onmessage).
+// Every query registers its own temporary listener and then removes it.
 
-  if (error) {
-    console.log(`KJV Worker Error: ${error}`);
-    addMsg(Bot, `Sorry, something went wrong with the search.`);
-  } else if (kind === 'kjv:done') {
-    console.log(`Results from Worker: ${JSON.stringify(results)}`);
-    displayResults(results);
-  }
-};
-
-
-
-/* Send the search query to the worker
+let qCounter = 0;
 function searchKJVStream(query, opts = { limit: 5, phrase: false }) {
   return new Promise((resolve, reject) => {
-    const queryId = Date.now();  // unique query ID to match results
+    const qid = ++qCounter;
     const onResult = (e) => {
-      if (e.data.qid !== queryId) return;
+      const { kind, qid: rid, results, error } = e.data || {};
+      if (rid !== qid) return;              // ignore other replies
       kjvWorker.removeEventListener('message', onResult);
-      if (e.data.kind === 'kjv:done') {
-        resolve(e.data.results);
-      } else if (e.data.kind === 'kjv:error') {
-        reject(new Error(e.data.error));
-      }
+      if (kind === 'kjv:done') return resolve(results || []);
+      return reject(new Error(error || 'Unknown worker error'));
     };
-
     kjvWorker.addEventListener('message', onResult);
-    kjvWorker.postMessage({ kind: 'kjv:search', qid: queryId, query, opts });
+    kjvWorker.postMessage({ kind: 'kjv:search', qid, query, opts });
   });
 }
-*/
+
+// Unified formatter: accepts {reference,snippet} OR {book,chapter,verse,text}
+function formatKJV(items, title) {
+  const lines = items.map(it => {
+    const reference = it.id || it.reference
+      || (it.book ? `${it.book} ${it.chapter}:${it.verse}` : 'No reference');
+
+    const raw = it.snippet || it.text || '';
+    // Strip Strong’s {H####}/{G####} and parser tags like {(H####)}
+    const snippet = raw.replace(/{[HG]\d+}|\{\([A-Z]\d+\)\}/g, '').trim();
+    return `• ${escapeHTML(reference)} — ${escapeHTML(snippet)}`;
+  });
+  return `${title}\n${lines.join('\n')}`;
+}
+
 // ---------- query router (fast paths first) ----------
-// ---------- Strong's Reference (H####) Regex ----------
 const STRONGS_RE = /\b[HG]\d{3,5}\b/i;
 
 async function getBotResponse(userText) {
   const msg = userText.trim();
-  if (!msg) return "Say something and I’ll try my best 🙂";
+  if (!msg) return "Say something and I will try my best 🙂";
 
   const lc = msg.toLowerCase();
-  
-  // ---------- Friendly basics (greetings, etc.) ----------
-  if (/\b(hi|hello|hey)\b/.test(lc)) return "Hello! What would you like to explore?";
-  if (/\bhow are you\b/.test(lc)) return "I'm doing great—thanks for asking! How about you?";
 
-  // ---------- Strong's lookup (priority) ----------
+  // Basics
+  if (/\b(hi|hello|hey)\b/.test(lc)) return "Hello! What would you like to explore?";
+  if (/\bhow are you\b/.test(lc)) return "I am doing well — thanks for asking! How about you?";
+
+  // Strong’s first
   if (STRONGS_RE.test(msg)) {
     const res = await searchKJVStream(msg, { limit: 5 });
     if (res.length) return formatKJV(res, `Results for ${msg}`);
-    return `I didn’t find Strong’s reference ${msg}.`;
+    return `I did not find Strong’s reference ${msg}.`;
   }
 
-  // ---------- PDF Snippets (specific works) ----------
+  // PDF snippets
   if (/\b(jane|austen|pride|elizabeth|bingley|darcy)\b/.test(lc)) {
     const snip = await getPdfSnippet('pride', 800);
     if (snip) return `From Pride & Prejudice (opening snippet):\n${snip}`;
@@ -167,7 +158,7 @@ async function getBotResponse(userText) {
     if (snip) return `From How to Speak and Write Correctly (opening snippet):\n${snip}`;
   }
 
-  // ---------- Entity-guided KJV Search (names, places, dates) ----------
+  // Entity-guided KJV search
   const doc = nlp(lc);
   const people = doc.people().out('array');
   const places = doc.places().out('array');
@@ -176,92 +167,31 @@ async function getBotResponse(userText) {
   if (people.length) {
     const name = people[0];
     const res = await searchKJVStream(name, { limit: 5 });
-    if (res.length) return formatKJV(res, `Mentions related to "${name}"`);
+    if (res.length) return formatKJV(res, `Mentions related to “${name}”`);
   }
   if (places.length) {
     const place = places[0];
     const res = await searchKJVStream(place, { limit: 5 });
-    if (res.length) return formatKJV(res, `Mentions of "${place}"`);
+    if (res.length) return formatKJV(res, `Mentions of “${place}”`);
   }
   if (dates.length) {
     const dateq = dates[0];
     const res = await searchKJVStream(dateq, { limit: 5 });
-    if (res.length) return formatKJV(res, `References related to "${dateq}"`);
+    if (res.length) return formatKJV(res, `References related to “${dateq}”`);
   }
 
-  // ---------- General KJV Search (fallback) ----------
+  // General KJV search
   const res = await searchKJVStream(msg, { limit: 5 });
-  if (res.length) return formatKJV(res, `Here’s what I found:`);
+  if (res.length) return formatKJV(res, `Here is what I found:`);
 
-  // ---------- Sentiment Fallback (positive/negative/neutral) ----------
+  // Sentiment fallback
   const sent = getSentiment(msg);
-  if (sent === 'positive') return "Love the energy—keep it coming! Want to explore a text or a topic?";
-  if (sent === 'negative') return "Sorry it’s feeling rough—want to switch topics or look something up?";
-
-  return "I didn’t find a good match yet. Try a Strong’s ID (e.g., H7225), a phrase in quotes, or name a work (e.g., Jimmie Dale).";
+  if (sent === 'positive') return "Love the energy — want to explore a text or a topic?";
+  if (sent === 'negative') return "Sorry it feels rough — want to switch topics or look something up?";
+  return "I did not find a good match yet. Try a Strong’s ID (e.g., H7225), a phrase in quotes, or name a work (e.g., Jimmie Dale).";
 }
 
-// ---------- Search KJV Stream (via Worker) ----------
-async function searchKJVStream(query, opts = { limit: 5, phrase: false }) {
-  return new Promise((resolve, reject) => {
-    const queryId = Date.now();  // unique query ID to match results
-    const onResult = (e) => {
-      if (e.data.qid !== queryId) return;
-      kjvWorker.removeEventListener('message', onResult);
-      if (e.data.kind === 'kjv:done') {
-        resolve(e.data.results);
-      } else if (e.data.kind === 'kjv:error') {
-        reject(new Error(e.data.error));
-      }
-    };
-
-    kjvWorker.addEventListener('message', onResult);
-    kjvWorker.postMessage({ kind: 'kjv:search', qid: queryId, query, opts });
-  });
-}
-// Function to display the results from the KJV search
-function displayResults(results) {
-  if (results.length === 0) {
-    addMsg('Bot', "Sorry, I couldn't find any relevant references.");
-  } else {
-    const formattedResults = results.map(result => {
-      const reference = `${result.book} ${result.chapter}:${result.verse}`;
-      let snippet = result.text;
-
-      // Optional: Remove Strong's numbers for cleaner display
-      snippet = snippet.replace(/{[H|G]\d+}/g, '');  // Remove Strong's references
-
-      // Or, you could format it by keeping the Strong's numbers visible
-      // snippet = snippet.replace(/{([H|G]\d+)}/g, '[$1]');  // Optional formatting
-
-      return `• ${escapeHTML(reference)} — ${escapeHTML(snippet)}`;
-    }).join('\n');
-    
-    addMsg('Bot', `Here’s what I found:\n${formattedResults}`);
-  }
-}
-
-
-/*function displayResults(results) {
-  if (results.length === 0) {
-    addMsg('Bot', "Sorry, I couldn't find any relevant references.");
-  } else {
-    const formattedResults = results.map(result => {
-      const reference = result.reference || "No reference";  // Ensure reference exists
-      const snippet = result.snippet || "No snippet available";  // Ensure snippet exists
-      return `• ${escapeHTML(reference)} — ${escapeHTML(snippet)}`;
-    }).join('\n');
-    
-    addMsg('Bot', `Here’s what I found:\n${formattedResults}`);
-  }
-}*/
-function formatKJV(items, title) {
-  // items: [{id, snippet, text}]
-  const lines = items.map(it => `• ${escapeHTML(it.id)} — ${it.snippet}`);
-  return `${title}\n${lines.join('\n')}`;
-}
-
-// ---------- UI handling (debounced submit) ----------
+// ---------- UI handling ----------
 let pending = false;
 function setBusy(b) {
   pending = b;
@@ -269,21 +199,21 @@ function setBusy(b) {
   input.disabled = b;
 }
 
-
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || pending) return;
+
   addMsg('You', text);
   input.value = '';
   setBusy(true);
   try {
     const reply = await getBotResponse(text);
-    addMsg('Jolene (Computer)', reply);
+    addMsg(bot, reply);
   } catch (err) {
-    log(`ERR: ${err.message}`);
-    addMsg('Jolene (Computer)', "Something hiccuped during search. Try a simpler query or another keyword.");
+    log(`ERR: ${err?.message || err}`);
+    addMsg(bot, "Something hiccuped during search. Try a simpler query or another keyword.");
   } finally {
-    setBusy(false);
+    setBusy(false); // <-- ensures the input/button “flush” after each request
   }
 });
