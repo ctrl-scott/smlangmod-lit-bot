@@ -1,0 +1,12 @@
+## Making cohesion and dynamic assets (pdfs other files) available and not pre-configured (in progress):
+https://chatgpt.com/share/68d30a84-60d0-800c-91c2-f5a9cc1f17f1
+
+## Original conversational model development - a simple idea to just make a reasonably scaled model that can eventually just dialog a little using public 
+domain works - for example once you see in compromise how math in writing can be
+manipulated it makes more sense (two minus one will equal one....) (moved to a new Chat conversation [see above])
+https://chatgpt.com/share/68cd5741-f130-800c-bf7c-eaef33fc2ecd
+
+## OCR reader and generator - this one is a OCR scanner to process pdfs not really 
+accurate and my machine is not really spec'd for heavy duty processing, easier to
+use ChatGPT - but there it is (in progress)
+https://chatgpt.com/share/68d30b28-c974-800c-9acd-4651709f48e6

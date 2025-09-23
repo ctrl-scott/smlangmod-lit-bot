@@ -1,0 +1,180 @@
+// workers/manifest_worker.js
+// Builds and caches a manifest of PDFs under /assets/.
+// Skips regeneration if ETag/Last-Modified (or etag.txt content) did not change.
+
+// Storage keys (localStorage used for simplicity; switch to IndexedDB if you prefer)
+const LS_KEYS = {
+  ETAG: 'assetsManifest.etag',
+  MANIFEST: 'assetsManifest.json'
+};
+
+// Config
+const ASSETS_DIR_URL = '/assets/';      // directory that contains PDFs
+const OPTIONAL_ETAG_TXT = '/assets/etag.txt'; // optional tiny file you bump when assets change
+
+// Utility: safe localStorage
+function lsGet(k) {
+  try { return localStorage.getItem(k); } catch (_) { return null; }
+}
+function lsSet(k, v) {
+  try { localStorage.setItem(k, v); } catch (_) {}
+}
+
+// Parse a directory index HTML page and extract .pdf links
+function extractPdfLinksFromHtml(html, baseUrl) {
+  // Very tolerant href extractor for .pdf links. Works on common autoindex pages.
+  const re = /href\s*=\s*"(.*?)"/gi;
+  const results = new Set();
+  let m;
+  while ((m = re.exec(html))) {
+    const href = m[1];
+    if (/\.pdf$/i.test(href)) {
+      try {
+        const url = new URL(href, baseUrl).pathname;
+        // Normalize to /assets/filename.pdf
+        if (url.toLowerCase().startsWith(ASSETS_DIR_URL)) {
+          results.add(url);
+        } else if (!url.includes(':')) {
+          // relative child (e.g. "foo.pdf")
+          results.add(ASSETS_DIR_URL + href.replace(/^\.?\//, ''));
+        }
+      } catch (_) { /* ignore */ }
+    }
+  }
+  return Array.from(results).sort();
+}
+
+// Compute a cheap hash for change detection fallback (when no headers exist)
+async function cheapHash(str) {
+  const enc = new TextEncoder().encode(str);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Try to fetch a small etag.txt; if present, use its body as the canonical "etag" marker
+async function fetchCustomEtag() {
+  try {
+    const r = await fetch(OPTIONAL_ETAG_TXT, { cache: 'no-cache' });
+    if (r.ok) {
+      const text = await r.text();
+      return text.trim();
+    }
+  } catch (_) {}
+  return null;
+}
+
+// HEAD the assets directory to sniff ETag/Last-Modified/Content-Length
+async function fetchDirHead() {
+  try {
+    const r = await fetch(ASSETS_DIR_URL, { method: 'HEAD', cache: 'no-cache' });
+    if (r.ok) {
+      return {
+        etag: r.headers.get('ETag') || '',
+        lm: r.headers.get('Last-Modified') || '',
+        clen: r.headers.get('Content-Length') || ''
+      };
+    }
+  } catch (_) {}
+  return { etag: '', lm: '', clen: '' };
+}
+
+// Fetch and parse the directory listing HTML (Option A)
+async function fetchDirListing() {
+  const r = await fetch(ASSETS_DIR_URL, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`Failed to GET ${ASSETS_DIR_URL}: ${r.status}`);
+  const html = await r.text();
+  const files = extractPdfLinksFromHtml(html, ASSETS_DIR_URL);
+  // If the server did not give a useful header etag, synthesize one from HTML
+  const headers = {
+    etag: r.headers.get('ETag') || '',
+    lm: r.headers.get('Last-Modified') || ''
+  };
+  if (!headers.etag && !headers.lm) {
+    headers.etag = await cheapHash(html);
+  }
+  return { files, headers };
+}
+
+// Build a manifest map from filenames -> normalized short keys
+function buildKeyedManifest(paths) {
+  // Example: "/assets/PP_Austen_PD_1.pdf" -> key "pp" (first normalized token)
+  const normalizeKey = (fileNameOnly) =>
+    fileNameOnly
+      .replace(/\.[^.]+$/, '')
+      .replace(/[_\-\s]+/g, ' ')
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .split(' ')
+      .filter(Boolean)[0] || fileNameOnly.toLowerCase();
+
+  const map = {};
+  for (const p of paths) {
+    const name = p.split('/').pop();
+    const k = normalizeKey(name);
+    // If a key collides, append an incrementing suffix
+    let key = k, i = 2;
+    while (map[key]) { key = `${k}${i++}`; }
+    map[key] = p;
+  }
+  return map;
+}
+
+// Main flow:
+// 1) If etag.txt exists, use it as the version marker. If unchanged, return cached manifest.
+// 2) Else, try HEAD on /assets/. If headers unchanged, return cached manifest.
+// 3) Else, GET /assets/ HTML, parse PDFs, cache, and return.
+async function buildOrLoadManifest() {
+  // 1) Custom etag file wins if present
+  const custom = await fetchCustomEtag();
+  if (custom) {
+    const prev = lsGet(LS_KEYS.ETAG);
+    if (prev && prev === custom) {
+      const cached = lsGet(LS_KEYS.MANIFEST);
+      if (cached) return JSON.parse(cached);
+    }
+    // Need to rebuild manifest from directory listing HTML
+    const { files, headers } = await fetchDirListing();
+    const manifest = buildKeyedManifest(files);
+    lsSet(LS_KEYS.MANIFEST, JSON.stringify(manifest));
+    // Store the custom marker; fall back to headers hash for some stability
+    lsSet(LS_KEYS.ETAG, custom || headers.etag || headers.lm || String(Date.now()));
+    return manifest;
+  }
+
+  // 2) No custom etag.txt — try HEAD-based change detection
+  const head = await fetchDirHead();
+  const marker = head.etag || head.lm || head.clen;
+  const prevMarker = lsGet(LS_KEYS.ETAG);
+
+  if (marker && prevMarker && marker === prevMarker) {
+    const cached = lsGet(LS_KEYS.MANIFEST);
+    if (cached) return JSON.parse(cached);
+  }
+
+  // 3) Fetch HTML directory listing and parse
+  const { files, headers } = await fetchDirListing();
+  const manifest = buildKeyedManifest(files);
+  lsSet(LS_KEYS.MANIFEST, JSON.stringify(manifest));
+  lsSet(LS_KEYS.ETAG, headers.etag || headers.lm || String(Date.now()));
+  return manifest;
+}
+
+// Message contract:
+// - { type: 'build' }                -> build/load manifest and post back { type:'ready', manifest }
+// - { type: 'invalidate' }           -> clear local cache
+self.onmessage = async (ev) => {
+  const msg = ev.data || {};
+  try {
+    if (msg.type === 'invalidate') {
+      lsSet(LS_KEYS.MANIFEST, '');
+      lsSet(LS_KEYS.ETAG, '');
+      self.postMessage({ type: 'invalidated' });
+      return;
+    }
+    // default action: build
+    const manifest = await buildOrLoadManifest();
+    self.postMessage({ type: 'ready', manifest });
+  } catch (err) {
+    self.postMessage({ type: 'error', error: (err && err.message) || String(err) });
+  }
+};

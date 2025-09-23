@@ -73,6 +73,8 @@ async function getPdfSnippet(which, chars = 600) {
   const paths = {
     pride: './assets/PP_Austen_PD_1.pdf',
     devlin: './assets/HowtoSpeakWrite_Devlin_PD_1.pdf',
+/*	devlintwo: './assets/how-to-speak-and-write-correctly-2-devlin.pdf'
+	devlinthree: './assets/how-to-speak-and-write-correctly-3-devlin.pdf'*/
     jimmie: './assets/AdvnturesJimmieDale_Packard_PD_1.pdf'
   };
   const path = paths[which];
